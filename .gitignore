@@ -1,0 +1,34 @@
+# OS junk
+.DS_Store
+Thumbs.db
+__MACOSX/
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Node
+node_modules/
+npm-debug.log*
+dist/
+build/
+.next/
+out/
+
+# Java
+*.class
+bin/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
