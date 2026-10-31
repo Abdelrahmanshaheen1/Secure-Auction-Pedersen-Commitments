@@ -1,0 +1,4 @@
+# Only needed to run the tests (tests/test_ec.py cross-checks the curve code against OpenSSL).
+# The auction itself has no dependencies.
+cryptography>=42
+pytest>=8

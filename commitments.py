@@ -1,58 +1,61 @@
 """
-commitments.py - Pedersen Commitment Implementation
-Purpose: Lock bids in cryptographic "boxes" that can't be changed
+commitments.py - Pedersen commitments on secp256k1
+
+    C = bid*G + randomness*H
+
+* Hiding:  C reveals nothing about the bid, because randomness is uniform and
+           randomness*H is uniform over the group (information-theoretic).
+* Binding: opening C to two different bids would reveal log_G(H). H is derived by
+           hashing a public seed, so nobody knows that value, and finding it means
+           solving the discrete-log problem.
+* Homomorphic: C(a, r1) + C(b, r2) == C(a + b, r1 + r2). The range proof relies on this.
 """
 
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import hashes
-import hashlib
 import secrets
 
+import ec
+
+
 class CommitmentParams:
-    """Stores the public parameters G and H for Pedersen commitments"""
+    """Public parameters: the two generators G and H and the group order."""
+
+    SEED_H = b"secure-auction/pedersen/H/v1"
+
     def __init__(self):
-        # Use secp256k1 curve (same as Bitcoin)
-        self.curve = ec.SECP256K1()
-
-        # G is the standard generator point
-        self.G = self._get_generator()
-
-        # H is another generator (derived deterministically)
-        self.H = self._derive_second_generator()
-
-    def _get_generator(self):
-        """Get the standard generator point G"""
-        return "G"
-
-    def _derive_second_generator(self):
-        """Derive second generator H from G"""
-        return "H"
+        self.curve = "secp256k1"
+        self.order = ec.N
+        self.G = ec.G
+        # "Nothing up my sleeve": H comes from hashing a public string, so no one
+        # knows an x with H = x*G. If someone did, they could open commitments to any bid.
+        self.H = ec.hash_to_point(self.SEED_H)
 
     def point_to_bytes(self, point):
-        """Convert elliptic curve point to bytes"""
-        if isinstance(point, str):
-            return point.encode()
-        return str(point).encode()
+        return ec.encode_point(point)
 
 
 def generate_commitment_params():
-    """Generate public parameters for commitments"""
+    """Generate (deterministically derive) the public parameters for commitments."""
     return CommitmentParams()
 
 
 def commit_bid(bid, randomness, params):
-    """Create a Pedersen commitment: C = bid*G + randomness*H"""
-    commitment_string = f"{bid}:{randomness}"
-    commitment = hashlib.sha256(commitment_string.encode()).hexdigest()
-    return commitment
+    """Create the Pedersen commitment C = bid*G + randomness*H (a curve point)."""
+    return ec.point_add(
+        ec.scalar_mult(bid, params.G),
+        ec.scalar_mult(randomness, params.H),
+    )
 
 
 def verify_commitment(commitment, bid, randomness, params):
-    """Verify that a commitment matches the claimed bid and randomness"""
-    recomputed = commit_bid(bid, randomness, params)
-    return commitment == recomputed
+    """Check that a commitment opens to the claimed bid and randomness."""
+    return commit_bid(bid, randomness, params) == commitment
+
+
+def commitment_to_hex(commitment):
+    """Short printable form of a commitment."""
+    return ec.encode_point(commitment).hex()
 
 
 def generate_randomness():
-    """Generate a random blinding factor for commitment"""
-    return secrets.randbelow(2**256)
+    """A uniformly random blinding factor in [0, group order)."""
+    return secrets.randbelow(ec.N)
