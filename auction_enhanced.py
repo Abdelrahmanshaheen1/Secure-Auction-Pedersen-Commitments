@@ -1,309 +1,140 @@
 """
-auction_enhanced.py - Enhanced Secure Auction System
-New Features: Visualization, Interactive Mode, Performance Metrics, Better Security
+auction_enhanced.py - Auction with step-by-step output, timings and an interactive mode
+
+Same protocol as auction.py (real Pedersen commitments, a real range proof, secure
+comparison on shared bits); this file adds measurements and a more detailed printout.
 """
 
-from commitments import generate_commitment_params, commit_bid, generate_randomness, verify_commitment
-from zkproofs import generate_range_proof, verify_range_proof
-from secret_sharing import share_value, reconstruct, get_large_prime
-from mpc import mpc_argmax
 import time
-import hashlib
+
+import ec
+from auction import SecureAuction, NUM_SERVERS
+from commitments import commitment_to_hex
+from mpc import MPC
 
 
-class EnhancedSecureAuction:
-    """
-    Enhanced auction system with visualization and metrics
-    """
+class EnhancedSecureAuction(SecureAuction):
+    """SecureAuction plus per-bidder timings and a detailed report."""
 
     def __init__(self, min_bid=100, max_bid=1000, auction_name="Secure Auction"):
-        """Initialize the enhanced auction"""
-        self.min_bid = min_bid
-        self.max_bid = max_bid
+        print("\n" + "═" * 70)
+        print(f"{'🔐 ' + auction_name.upper() + ' 🔐':^70}")
+        print("═" * 70)
+        super().__init__(min_bid, max_bid, verbose=False)
         self.auction_name = auction_name
-        self.params = generate_commitment_params()
-        self.p = get_large_prime()
-
-        # Storage
-        self.bidders = {}
-        self.shares = {}
-
-        # Metrics
-        self.start_time = None
         self.registration_times = []
-        self.total_proofs_generated = 0
-        self.total_proofs_verified = 0
         self.rejected_bids = 0
-
-        self._print_header()
-        print(f"🎯 {self.auction_name} Initialized")
-        print(f"   Valid bid range: [{min_bid}, {max_bid}]")
-        print(f"   Security: 3-Party MPC with {len(str(self.p))} digit prime")
-        print(f"   Cryptography: Pedersen Commitments + ZK Proofs\n")
-
-    def _print_header(self):
-        """Print fancy header"""
-        print("\n" + "═"*70)
-        print(f"{'🔐 ' + self.auction_name.upper() + ' 🔐':^70}")
-        print("═"*70)
-
-    def _print_progress_bar(self, current, total, prefix="Progress"):
-        """Print a progress bar"""
-        bar_length = 40
-        filled = int(bar_length * current / total)
-        bar = "█" * filled + "░" * (bar_length - filled)
-        percent = 100 * current / total
-        print(f"\r{prefix}: |{bar}| {percent:.1f}% ({current}/{total})", end="")
-        if current == total:
-            print()
+        print(f"🎯 {auction_name} initialized")
+        print(f"   Valid bid range: [{min_bid}, {max_bid}] ({self.n_bits}-bit comparison)")
+        print(f"   Cryptography: Pedersen commitments on {self.params.curve}, bit-decomposition")
+        print(f"   range proofs, {NUM_SERVERS}-server MPC with Beaver triples\n")
 
     def register_bidder(self, bidder_id, bid, show_details=True):
-        """
-        Register a bidder with enhanced tracking
-        """
         start = time.time()
-
         if show_details:
-            print(f"\n{'─'*70}")
-            print(f"📝 Registering Bidder {bidder_id}")
-            print(f"{'─'*70}")
+            print(f"\n{'─' * 70}\n📝 Registering Bidder {bidder_id}\n{'─' * 70}")
 
-        # Step 1: Commitment
-        randomness = generate_randomness()
-        commitment = commit_bid(bid, randomness, self.params)
-        if show_details:
-            print(f"✓ Step 1/4: Commitment created")
-            print(f"  └─ Hash: {commitment[:32]}...")
-
-        # Step 2: ZK Proof Generation
         try:
-            proof = generate_range_proof(bid, randomness, self.min_bid, self.max_bid, self.params)
-            self.total_proofs_generated += 1
-            if show_details:
-                print(f"✓ Step 2/4: ZK Proof generated")
-                print(f"  └─ Proving: {self.min_bid} ≤ bid ≤ {self.max_bid}")
-        except ValueError as e:
+            submission = self.prepare_submission(bidder_id, bid)
+        except ValueError as error:
             self.rejected_bids += 1
             if show_details:
-                print(f"✗ Step 2/4: ZK Proof FAILED")
-                print(f"  └─ Reason: {e}")
-                print(f"  └─ Status: ❌ BID REJECTED")
+                print(f"✗ Step 1/3: no valid range proof exists\n  └─ Reason: {error}\n  └─ Status: ❌ BID REJECTED")
             return False
 
-        # Step 3: Proof Verification
-        is_valid = verify_range_proof(proof, commitment, self.params)
-        self.total_proofs_verified += 1
+        if show_details:
+            print("✓ Step 1/3: commitment and range proof created")
+            print(f"  └─ Commitment: {commitment_to_hex(submission['commitment'])[:40]}...")
+            print(f"  └─ Proving: {self.min_bid} ≤ bid ≤ {self.max_bid} without revealing the bid")
 
-        if not is_valid:
+        if not self.submit(bidder_id, submission):
             self.rejected_bids += 1
             if show_details:
-                print(f"✗ Step 3/4: Proof verification FAILED")
-                print(f"  └─ Status: ❌ BID REJECTED")
+                print("✗ Step 2/3: verification failed\n  └─ Status: ❌ BID REJECTED")
             return False
 
-        if show_details:
-            print(f"✓ Step 3/4: Proof verified successfully")
-
-        # Step 4: Secret Sharing
-        shares = share_value(bid, self.p)
-        if show_details:
-            print(f"✓ Step 4/4: Bid split into secret shares")
-            print(f"  ├─ Server 1 receives share: {str(shares[0])[:20]}...")
-            print(f"  ├─ Server 2 receives share: {str(shares[1])[:20]}...")
-            print(f"  └─ Server 3 receives share: {str(shares[2])[:20]}...")
-
-        # Verify shares reconstruct correctly (security check)
-        reconstructed = reconstruct(shares, self.p)
-        if reconstructed != bid:
-            print(f"  ⚠️  Warning: Share reconstruction mismatch!")
-            return False
-
-        if show_details:
-            print(f"\n🔒 Security Check: Shares reconstruct correctly ✓")
-
-        # Store everything
-        self.bidders[bidder_id] = {
-            'bid': bid,
-            'commitment': commitment,
-            'proof': proof,
-            'randomness': randomness,
-            'timestamp': time.time()
-        }
-        self.shares[bidder_id] = shares
-
-        # Track timing
         elapsed = time.time() - start
         self.registration_times.append(elapsed)
-
         if show_details:
-            print(f"⏱️  Registration time: {elapsed*1000:.2f}ms")
-            print(f"✅ Bidder {bidder_id} registered successfully!")
-
+            print("✓ Step 2/3: range proof verified, shares match the committed bits")
+            print(f"✓ Step 3/3: each bit split into {NUM_SERVERS} shares, one per server")
+            print(f"⏱️  Prove + verify + share check: {elapsed * 1000:.0f}ms")
+            print(f"✅ Bidder {bidder_id} registered")
         return True
 
-    def verify_all_commitments(self):
-        """Verify all bidders' commitments (optional security check)"""
-        print(f"\n{'─'*70}")
-        print("🔍 Verifying All Commitments...")
-        print(f"{'─'*70}")
-
-        all_valid = True
-        for bidder_id, info in self.bidders.items():
-            is_valid = verify_commitment(
-                info['commitment'],
-                info['bid'],
-                info['randomness'],
-                self.params
-            )
-            status = "✓" if is_valid else "✗"
-            print(f"{status} Bidder {bidder_id}: {'Valid' if is_valid else 'INVALID'}")
-            all_valid = all_valid and is_valid
-
-        print(f"\n{'✅ All commitments valid!' if all_valid else '❌ Some commitments invalid!'}")
-        return all_valid
-
-    def run_auction(self, verify_commitments=True):
-        """Run the enhanced auction with metrics"""
-
-        self._print_header()
-        print("🚀 AUCTION COMPUTATION PHASE")
-        print("═"*70)
-
-        if not self.shares:
+    def run_auction(self):
+        print("\n" + "═" * 70 + "\n🚀 AUCTION COMPUTATION PHASE\n" + "═" * 70)
+        if not self.bit_shares:
             print("\n❌ No valid bidders registered!")
             return None, None
 
-        self.start_time = time.time()
-
-        # Optional: Verify all commitments
-        if verify_commitments:
-            self.verify_all_commitments()
-
-        # Display auction info
-        print(f"\n📊 Auction Statistics:")
-        print(f"   • Total bidders registered: {len(self.shares)}")
-        print(f"   • Bids rejected: {self.rejected_bids}")
-        print(f"   • ZK Proofs generated: {self.total_proofs_generated}")
-        print(f"   • ZK Proofs verified: {self.total_proofs_verified}")
-
+        print(f"\n📊 Statistics: {len(self.bit_shares)} bidders registered, "
+              f"{self.rejected_bids} rejected")
         if self.registration_times:
-            avg_time = sum(self.registration_times) / len(self.registration_times)
-            print(f"   • Avg registration time: {avg_time*1000:.2f}ms")
+            avg = sum(self.registration_times) / len(self.registration_times)
+            print(f"   Average registration time: {avg * 1000:.0f}ms")
 
-        print(f"\n🔒 Running MPC Protocol...")
-        print(f"   Step 1: Collecting secret shares from all bidders...")
+        bidder_ids = list(self.bit_shares)
+        mpc = MPC(NUM_SERVERS, ec.N)
+        start = time.time()
+        winner_index, offset = mpc.argmax_bits([self.bit_shares[b] for b in bidder_ids])
+        mpc_time = time.time() - start
+        self.last_mpc = mpc
 
-        # Collect shares
-        bidder_ids = list(self.shares.keys())
-        all_shares = [self.shares[bidder_id] for bidder_id in bidder_ids]
+        winner_id, winning_bid = bidder_ids[winner_index], offset + self.min_bid
+        stats = mpc.summary()
 
-        print(f"   Step 2: Servers performing secure computation...")
-        print(f"   Step 3: Comparing {len(all_shares)} bids using MPC...")
-
-        # Show progress
-        for i in range(len(all_shares)):
-            time.sleep(0.1)  # Simulate computation
-            self._print_progress_bar(i+1, len(all_shares), "   MPC Progress")
-
-        # Find maximum
-        mpc_start = time.time()
-        max_index, max_bid = mpc_argmax(all_shares, self.p)
-        mpc_time = time.time() - mpc_start
-
-        if max_index is None:
-            print("\n❌ Error in auction computation!")
-            return None, None
-
-        winner_id = bidder_ids[max_index]
-        total_time = time.time() - self.start_time
-
-        # Display results
-        self._print_results(winner_id, max_bid, mpc_time, total_time)
-
-        return winner_id, max_bid
-
-    def _print_results(self, winner_id, winning_bid, mpc_time, total_time):
-        """Print fancy results"""
-        print("\n" + "═"*70)
-        print("🎉 AUCTION RESULTS")
-        print("═"*70)
-        print(f"""
-╔════════════════════════════════════════════════════════════════════╗
-║                         🏆 WINNER ANNOUNCEMENT 🏆                  ║
-╠════════════════════════════════════════════════════════════════════╣
-║  Winner:        Bidder {winner_id:<45}║
-║  Winning Bid:   ${winning_bid:<44}║
-║  Total Bidders: {len(self.shares):<49}║
-╚════════════════════════════════════════════════════════════════════╝
-        """)
-
-        print("⏱️  Performance Metrics:")
-        print(f"   • MPC computation time: {mpc_time*1000:.2f}ms")
-        print(f"   • Total auction time: {total_time:.2f}s")
-
-        print("\n🔐 Privacy Guarantees:")
-        print(f"   ✓ All losing bids remain SECRET")
-        print(f"   ✓ No server saw any complete bid")
-        print(f"   ✓ Only the difference was revealed during comparison")
-        print(f"   ✓ {len(self.shares) - 1} bids stay private forever")
-
-        print("═"*70)
+        print("\n" + "═" * 70 + "\n🎉 AUCTION RESULTS\n" + "═" * 70)
+        print(f"  🏆 Winner:       Bidder {winner_id}")
+        print(f"  💰 Winning bid:  {winning_bid}")
+        print(f"  👥 Bidders:      {len(bidder_ids)}")
+        print(f"\n⏱️  MPC computation: {mpc_time * 1000:.0f}ms "
+              f"({stats['beaver_triples']} secure multiplications)")
+        print("\n🔐 What was revealed:")
+        print(f"   • the winner and the winning bid ({stats['output_values_opened']} opened values)")
+        print(f"   • {stats['masked_values_opened']} values that are uniformly random one-time masks")
+        print("   • NOT the losing bids, and NOT the differences between bids")
+        print("═" * 70)
+        return winner_id, winning_bid
 
     def display_summary(self):
-        """Display detailed summary"""
-        print("\n" + "═"*70)
-        print("📋 COMPLETE AUCTION SUMMARY (Admin View)")
-        print("═"*70)
-
-        print(f"\n{'Bidder ID':<12} {'Bid':<10} {'Status':<12} {'Commitment':<20}")
-        print("─"*70)
-
+        """Public view: commitments only. The bids themselves are not stored anywhere."""
+        print("\n" + "═" * 70 + "\n📋 REGISTERED BIDDERS (public view)\n" + "═" * 70)
+        print(f"\n{'Bidder ID':<12} {'Status':<14} {'Commitment':<44}")
+        print("─" * 70)
         for bidder_id, info in self.bidders.items():
-            status = "✅ Accepted"
-            commitment_preview = info['commitment'][:16] + "..."
-            print(f"{str(bidder_id):<12} ${info['bid']:<9} {status:<12} {commitment_preview:<20}")
-
-        print("═"*70)
+            print(f"{str(bidder_id):<12} {'✅ Accepted':<14} "
+                  f"{commitment_to_hex(info['commitment'])[:40] + '...':<44}")
+        print("═" * 70)
 
 
 def interactive_mode():
-    """
-    Interactive mode: Let users create their own auction
-    """
-    print("\n" + "🎮"*35)
-    print("INTERACTIVE AUCTION MODE")
-    print("🎮"*35)
-
-    # Get auction parameters
-    print("\n📝 Setup your auction:")
-
+    """Let the user type bids into their own auction."""
+    print("\n" + "🎮" * 35 + "\nINTERACTIVE AUCTION MODE\n" + "🎮" * 35)
     try:
         min_bid = int(input("Enter minimum bid (default 100): ") or "100")
         max_bid = int(input("Enter maximum bid (default 1000): ") or "1000")
         num_bidders = int(input("How many bidders? (2-10): ") or "3")
-
-        if num_bidders < 2 or num_bidders > 10:
+        if not 2 <= num_bidders <= 10:
             print("⚠️  Using 3 bidders")
             num_bidders = 3
-    except:
+        if not 0 <= min_bid < max_bid:
+            raise ValueError("need 0 <= min < max")
+    except (ValueError, EOFError):
         print("⚠️  Using defaults: min=100, max=1000, bidders=3")
         min_bid, max_bid, num_bidders = 100, 1000, 3
 
-    # Create auction
     auction = EnhancedSecureAuction(min_bid, max_bid, "Interactive Auction")
-
-    # Get bids
     print(f"\n💰 Enter {num_bidders} bids:")
     for i in range(1, num_bidders + 1):
         try:
-            bid = int(input(f"  Bidder {i}'s bid: "))
-            auction.register_bidder(i, bid, show_details=False)
-            print(f"    ✓ Registered")
-        except:
-            print(f"    ✗ Invalid input, skipping")
+            auction.register_bidder(i, int(input(f"  Bidder {i}'s bid: ")), show_details=False)
+        except (ValueError, EOFError):
+            print("    ✗ Invalid input, skipping")
+            continue
+        print("    ✓ Registered" if i in auction.bidders else "    ✗ Rejected (outside the allowed range)")
 
-    # Run auction
-    if auction.shares:
+    if auction.bit_shares:
         auction.display_summary()
         auction.run_auction()
     else:
@@ -311,52 +142,32 @@ def interactive_mode():
 
 
 def run_example_auction_enhanced(bids, min_bid=100, max_bid=1000, name="Example Auction"):
-    """Run example with enhanced features"""
-
     auction = EnhancedSecureAuction(min_bid, max_bid, name)
-
-    # Register all bidders
-    print(f"\n{'═'*70}")
-    print("📝 REGISTRATION PHASE")
-    print(f"{'═'*70}")
-
+    print(f"\n{'═' * 70}\n📝 REGISTRATION PHASE\n{'═' * 70}")
     for i, bid in enumerate(bids, start=1):
         auction.register_bidder(i, bid, show_details=True)
-
-    # Show summary
     auction.display_summary()
-
-    # Run auction
-    winner, winning_bid = auction.run_auction()
-
-    return winner, winning_bid
+    return auction.run_auction()
 
 
-# Main execution
 if __name__ == "__main__":
+    print("\n" + "█" * 70 + "\nENHANCED SECURE SEALED-BID AUCTION SYSTEM\n" + "█" * 70)
 
-    print("\n" + "█"*70)
-    print("ENHANCED SECURE SEALED-BID AUCTION SYSTEM")
-    print("█"*70)
-
-    # Example 1
     print("\n\n🔹 EXAMPLE 1: Standard Auction")
     run_example_auction_enhanced([150, 920, 600], name="Standard Auction")
 
-    # Example 2
     print("\n\n🔹 EXAMPLE 2: Tie-Breaking Auction")
     run_example_auction_enhanced([350, 350, 100, 300], name="Tie-Breaking Auction")
 
-    # Example 3
     print("\n\n🔹 EXAMPLE 3: Security Test (Invalid Bids)")
     run_example_auction_enhanced([10, 999, 300, 700, 2000], name="Security Test Auction")
 
-    # Interactive mode
-    print("\n\n" + "█"*70)
-    response = input("\n🎮 Want to try INTERACTIVE MODE? (yes/no): ")
-    if response.lower() in ['yes', 'y']:
+    print("\n\n" + "█" * 70)
+    try:
+        answer = input("\n🎮 Want to try INTERACTIVE MODE? (yes/no): ")
+    except EOFError:
+        answer = "no"
+    if answer.strip().lower() in ("yes", "y"):
         interactive_mode()
 
-    print("\n" + "█"*70)
-    print("ALL DEMONSTRATIONS COMPLETE ✅")
-    print("█"*70)
+    print("\n" + "█" * 70 + "\nALL DEMONSTRATIONS COMPLETE ✅\n" + "█" * 70)

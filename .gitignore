@@ -32,3 +32,4 @@ bin/
 
 # Logs
 *.log
+.pytest_cache/
