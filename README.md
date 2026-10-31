@@ -1,8 +1,67 @@
+<div align="center">
+
 # Secure Sealed-Bid Auction
 
-A sealed-bid auction in which bidders prove their bid is in the allowed range without revealing it, and three servers find the highest bid without ever seeing any bid. Only the winner and the winning price come out.
+**Bidders prove their bid is in range without revealing it. Three servers find the highest bid without ever seeing one.**
+Only the winner and the winning price come out.
 
-It combines four pieces, all written from scratch in plain Python (no crypto dependencies at runtime):
+[![Tests](https://github.com/Abdelrahmanshaheen1/Secure-Auction-Pedersen-Commitments/actions/workflows/tests.yml/badge.svg)](https://github.com/Abdelrahmanshaheen1/Secure-Auction-Pedersen-Commitments/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-110-2ea043)
+![Runtime deps](https://img.shields.io/badge/runtime%20dependencies-none-8a3ffc)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+</div>
+
+## At a glance
+
+| | |
+|---|---|
+| **What** | Pedersen commitments + zero-knowledge range proof + 3-server MPC, written from scratch in plain Python |
+| **Curve** | secp256k1 (checked against OpenSSL in the tests) |
+| **Output** | The winner and the winning price. No losing bid, and no difference between bids, is ever opened |
+| **Try it** | `python auction.py` (no packages needed) |
+| **Tests** | 110, including forged proofs and cheating bidders, mutation-tested |
+| **Honest scope** | A one-process simulation of the protocol, not a deployed system. See [Security properties, and their limits](#security-properties-and-their-limits) |
+
+```text
+📝 Registering Bidder 1 with bid 10...
+   ✗ Invalid bid: Bid 10 is not in range [100, 1000]
+
+📝 Registering Bidder 2 with bid 999...
+   ✓ Commitment 032ba33ab19afbf764068f12...
+   ✓ Range proof generated (20 bit commitments)
+   ✓ Proof verified, shares match the commitment
+   ✓ Bid split into 3 shares per bit
+   ...
+🏆 Winner: Bidder 2
+💰 Winning Bid: 999
+🔐 Opened during the run: 11 output values (winner and winning bid) and 120 uniformly random Beaver values.
+   No losing bid, and no difference between bids, was revealed.
+```
+
+<sub>Excerpt of the real output of `python auction.py` (third example auction, lightly shortened).</sub>
+
+## Contents
+
+[Architecture](#architecture) · [How it works](#how-it-works) · [Run it](#run-it) · [Security properties](#security-properties-and-their-limits) · [Tests](#tests) · [What changed](#what-changed) · [Repository layout](#repository-layout) · [Team and credits](#team-and-credits) · [License](#license)
+
+## Architecture
+
+```mermaid
+flowchart LR
+    B["Bidder"] -->|"commitment C = bid·G + r·H"| P["Public board"]
+    B -->|"range proof: min ≤ bid ≤ max"| P
+    B -->|"one additive share per server"| S1["Server 1"]
+    B --> S2["Server 2"]
+    B --> S3["Server 3"]
+    P -->|"verify proof and share check"| S1
+    S1 <-->|"Beaver-triple comparison on shared bits"| S2
+    S2 <--> S3
+    S1 -->|"open only: winner index and winning bid"| R["Result"]
+```
+
+The four building blocks, each a separate module:
 
 | Piece | File | What it does |
 |---|---|---|
@@ -87,6 +146,27 @@ The checks were also mutation-tested: removing the bit-sum check, the bit proofs
 | Bidders' plaintext bids and randomness were stored inside the auction object | Servers keep only commitments, proofs and shares |
 | Share arithmetic modulo a 61-bit prime, unrelated to the commitments | Shares modulo the secp256k1 group order, so shares of the bits line up with the bit commitments |
 
-## Skills demonstrated
+## Repository layout
 
-Applied cryptography beyond textbook definitions: Pedersen commitments, Sigma-protocol OR-proofs with Fiat-Shamir, a range proof from bit decomposition, additive secret sharing and Beaver-triple MPC, and protocol-level reasoning about what each piece does and does not protect (including finding and fixing the leaks in an earlier design, with tests that attack the implementation).
+```text
+.
+├── ec.py                       # secp256k1 arithmetic, hash-to-curve
+├── commitments.py              # Pedersen commitments
+├── zkproofs.py                 # bit-decomposition range proof, Fiat-Shamir OR-proofs
+├── secret_sharing.py           # 3-server additive sharing
+├── mpc.py                      # Beaver triples, secure comparison and maximum
+├── auction.py                  # the protocol and the three example auctions
+├── auction_enhanced.py         # same, with timings and an interactive mode
+├── Secure_Auction_Project.ipynb  # notebook walkthrough
+├── tests/                      # one test module per layer
+├── requirements.txt            # test-only dependencies
+└── .github/workflows/tests.yml # CI
+```
+
+## Team and credits
+
+The original coursework was done by a team of three. This repository holds the version in which the cryptographic core was later rewritten (commitments, range proof, MPC comparison) and covered by tests; the history table above lists what changed and why.
+
+## License
+
+[MIT](LICENSE) © 2026 Abdelrahman Shaheen
